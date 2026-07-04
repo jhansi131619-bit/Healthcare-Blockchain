@@ -1,22 +1,104 @@
 import React, { useState, useEffect } from 'react';
 import { Database, Link2, Shield, Activity, RefreshCw } from 'lucide-react';
 import { getLedger } from '../services/storage';
+import { isContractsDeployed, getContracts } from '../services/blockchain';
 
 export default function AuditLedger() {
   const [ledger, setLedger] = useState([]);
   const [refreshing, setRefreshing] = useState(false);
 
-  const fetchLedger = () => {
+  const fetchLedger = async () => {
     setRefreshing(true);
-    setTimeout(() => {
-      setLedger([...getLedger()].reverse()); // Show newest first
+    try {
+      const localLedger = [...getLedger()];
+      
+      if (isContractsDeployed()) {
+        const { recordRegistry, accessControl } = await getContracts();
+        
+        // Query events from contract
+        const uploads = await recordRegistry.queryFilter(recordRegistry.filters.RecordUploaded());
+        const views = await recordRegistry.queryFilter(recordRegistry.filters.RecordViewed());
+        const grants = await accessControl.queryFilter(accessControl.filters.AccessGranted());
+        const revokes = await accessControl.queryFilter(accessControl.filters.AccessRevoked());
+
+        const blockchainBlocks = [];
+
+        // Helper to safely get timestamps/details
+        const resolveEvents = async (events, actionName, dataMapper) => {
+          for (const event of events) {
+            try {
+              const blockDetails = await event.getBlock();
+              blockchainBlocks.push({
+                index: event.blockNumber,
+                timestamp: new Date(Number(blockDetails.timestamp) * 1000).toISOString(),
+                hash: event.transactionHash,
+                prevHash: blockDetails.parentHash,
+                data: {
+                  action: actionName,
+                  ...dataMapper(event.args)
+                }
+              });
+            } catch (innerErr) {
+              console.warn("Could not load block details for event:", innerErr);
+            }
+          }
+        };
+
+        await resolveEvents(uploads, 'RECORD_REGISTERED', (args) => ({
+          operator: `Patient (${args[1].substring(0, 6)}...)`,
+          recordId: args[0],
+          title: args[3],
+          ipfsHash: args[2]
+        }));
+
+        await resolveEvents(views, 'RECORD_DECRYPTED', (args) => ({
+          operator: `Doctor (${args[1].substring(0, 6)}...)`,
+          recordTitle: `Record Ref: ${args[0]}`,
+          recordId: args[0],
+          facility: 'Web3 Clinic'
+        }));
+
+        await resolveEvents(grants, 'CONSENT_GRANTED', (args) => ({
+          operator: `Patient (${args[0].substring(0, 6)}...)`,
+          providerName: `Doctor (${args[1].substring(0, 6)}...)`,
+          recordTitle: `Record: ${args[2]}`,
+          recordId: args[2]
+        }));
+
+        await resolveEvents(revokes, 'CONSENT_REVOKED', (args) => ({
+          operator: `Patient (${args[0].substring(0, 6)}...)`,
+          providerName: `Doctor (${args[1].substring(0, 6)}...)`,
+          recordTitle: `Record: ${args[2]}`,
+          recordId: args[2]
+        }));
+
+        // Sort by block number ascending
+        blockchainBlocks.sort((a, b) => a.index - b.index);
+
+        // Merge local connections and genesis
+        const merged = [
+          ...localLedger.filter(b => b.data.action === 'GENESIS' || b.data.action.includes('WALLET')),
+          ...blockchainBlocks
+        ];
+
+        // Sort final list by block index descending
+        merged.sort((a, b) => b.index - a.index);
+        setLedger(merged);
+      } else {
+        setLedger([...localLedger].reverse());
+      }
+    } catch (error) {
+      console.error('Error compiling blockchain ledger:', error);
+      setLedger([...getLedger()].reverse());
+    } finally {
       setRefreshing(false);
-    }, 500);
+    }
   };
 
   useEffect(() => {
     fetchLedger();
   }, []);
+
 
   return (
     <div style={{ maxWidth: 1200, margin: '0 auto', padding: '40px 24px', display: 'flex', flexDirection: 'column', gap: 32 }}>

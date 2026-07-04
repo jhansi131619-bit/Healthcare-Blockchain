@@ -1,8 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { FileText, Lock, Plus, Database, Eye, HardDrive, CheckCircle } from 'lucide-react';
-import { getRecords, saveRecord } from '../services/storage';
-import { encryptData } from '../services/crypto';
-import { uploadToIPFS } from '../services/ipfs';
+import { getRecords, saveRecord, getWalletInfo } from '../services/storage';
 import Visualizer from '../components/Visualizer';
 
 export default function Records() {
@@ -11,6 +9,7 @@ export default function Records() {
   const [category, setCategory] = useState('Diagnostic');
   const [facility, setFacility] = useState('');
   const [cleartext, setCleartext] = useState('');
+  const [wallet, setWallet] = useState({ connected: false, address: '' });
   
   // Animation states
   const [transferStage, setTransferStage] = useState('idle');
@@ -20,50 +19,36 @@ export default function Records() {
   const [selectedRecord, setSelectedRecord] = useState(null);
 
   useEffect(() => {
-    setRecords(getRecords());
+    const loadRecords = async () => {
+      const walletInfo = getWalletInfo();
+      setWallet(walletInfo);
+      const recs = await getRecords(walletInfo.connected ? walletInfo.address : '');
+      setRecords(recs);
+    };
+    loadRecords();
   }, []);
 
-  const handleUpload = (e) => {
+  const handleUpload = async (e) => {
     e.preventDefault();
     if (!title || !facility || !cleartext) return;
 
     // Trigger Visualizer animation stages
     setTransferStage('upload');
-    setVisualizerText('Hashing and encrypting clinical file contents using local key...');
+    setVisualizerText('Generating random AES key and encrypting cleartext locally...');
 
-    setTimeout(() => {
-      // 1. Generate local document key reference
-      const docKey = '0xkey_' + Math.random().toString(36).substr(2, 10);
+    try {
+      const address = wallet.connected ? wallet.address : '';
       
-      // 2. Encrypt cleartext locally
-      const ciphertext = encryptData(cleartext, docKey);
+      // Save record triggers encryption, IPFS, and smart contract
+      await saveRecord(title, category, facility, cleartext, address);
 
-      setVisualizerText('Broadcasting cipher blocks to IPFS storage providers...');
+      setVisualizerText('Uploading ciphertext to IPFS & indexing on blockchain...');
 
-      setTimeout(() => {
-        // 3. Upload to IPFS nodes
-        const ipfsResult = uploadToIPFS(ciphertext, title);
+      setTimeout(async () => {
+        setVisualizerText(`Success! Stored on blockchain ledger & IPFS.`);
 
-        setVisualizerText(`Success! Stored on IPFS as Content-ID: ${ipfsResult.cid}`);
-
-        // 4. Save record locally
-        const newRecord = {
-          id: 'rec_' + Math.random().toString(36).substr(2, 9),
-          title,
-          date: new Date().toISOString().split('T')[0],
-          category,
-          facility,
-          ownerKey: '0xpub_john_doe',
-          fileName: title.toLowerCase().replace(/ /g, '_') + '.enc',
-          ipfsHash: ipfsResult.cid,
-          size: (ipfsResult.size / 1024).toFixed(1) + ' KB',
-          replicas: ipfsResult.replicas,
-          encryptedContent: ciphertext,
-          decryptedContent: cleartext
-        };
-
-        saveRecord(newRecord);
-        setRecords(getRecords());
+        const recs = await getRecords(address);
+        setRecords(recs);
         
         // Reset form
         setTitle('');
@@ -76,8 +61,13 @@ export default function Records() {
           setVisualizerText('');
         }, 1200);
       }, 1500);
-    }, 1500);
+    } catch (err) {
+      alert(err.message || 'Record registration failed');
+      setTransferStage('idle');
+      setVisualizerText('');
+    }
   };
+
 
   return (
     <div style={{ maxWidth: 1200, margin: '0 auto', padding: '40px 24px', display: 'flex', flexDirection: 'column', gap: 32 }}>

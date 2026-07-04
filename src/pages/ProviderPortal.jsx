@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { Eye, Shield, Lock, ShieldAlert, Heart, RefreshCw, Key, Unlock, FileText, CheckCircle } from 'lucide-react';
-import { getRecords, getConsents, MOCK_PROVIDERS, getPatientKeys, appendLedgerEvent } from '../services/storage';
-import { decryptData } from '../services/crypto';
+import { getRecords, getConsents, MOCK_PROVIDERS, getOrCreatePatientKeys, appendLedgerEvent, getWalletInfo } from '../services/storage';
+import { decryptAES, decryptRSA } from '../services/crypto';
+import { fetchFromIPFS } from '../services/ipfs';
+import { isContractsDeployed, getContracts } from '../services/blockchain';
 import Visualizer from '../components/Visualizer';
 
 export default function ProviderPortal() {
@@ -20,8 +22,18 @@ export default function ProviderPortal() {
   const [visualizerText, setVisualizerText] = useState('');
 
   useEffect(() => {
-    const pKeys = getPatientKeys();
-    setPatientKeyInput(pKeys.publicKey || '');
+    const loadKeys = async () => {
+      // In simulated mode, set patient public key.
+      // In Web3 mode, patientKeyInput can be entered manually by the clinician (patient's MetaMask address).
+      const walletInfo = getWalletInfo();
+      if (walletInfo.connected && walletInfo.address) {
+        setPatientKeyInput(walletInfo.address);
+      } else {
+        const pKeys = await getOrCreatePatientKeys('');
+        setPatientKeyInput(pKeys.publicKey || '');
+      }
+    };
+    loadKeys();
     
     const prov = MOCK_PROVIDERS.find(p => p.id === activeProviderId);
     setActiveProvider(prov);
@@ -32,70 +44,101 @@ export default function ProviderPortal() {
     setDecryptedContents({});
   }, [activeProviderId]);
 
-  const handleFetch = (e) => {
+  const handleFetch = async (e) => {
     e.preventDefault();
     if (!patientKeyInput) return;
 
     setTransferStage('exchange');
     setVisualizerText(`Connecting to patient node registry...`);
 
-    setTimeout(() => {
-      setVisualizerText(`Checking smart contracts for active consent rules...`);
-
-      setTimeout(() => {
-        const allRecords = getRecords();
-        const allConsents = getConsents();
-        
-        setRecords(allRecords);
-        setConsents(allConsents);
-        setFetched(true);
-        setTransferStage('idle');
-        setVisualizerText('');
-      }, 1500);
-    }, 1500);
+    try {
+      const allRecords = await getRecords(patientKeyInput);
+      const allConsents = await getConsents(patientKeyInput);
+      
+      setRecords(allRecords);
+      setConsents(allConsents);
+      setFetched(true);
+      setTransferStage('idle');
+      setVisualizerText('');
+    } catch (err) {
+      alert(err.message || 'Failed to fetch patient records');
+      setTransferStage('idle');
+      setVisualizerText('');
+    }
   };
 
-  const handleDecrypt = (record) => {
-    const consent = consents.find(c => c.recordId === record.id && c.providerId === activeProviderId);
-    
-    if (!consent || consent.status !== 'Active') {
-      alert("Error: You do not have an active consent contract for this record!");
-      return;
-    }
-
-    setVisualizerText(`Retrieving ciphertext block from IPFS: ${record.ipfsHash.substring(0, 15)}...`);
+  const handleDecrypt = async (record) => {
     setTransferStage('exchange');
+    setVisualizerText(`Submitting read request to blockchain and logging audit log...`);
 
-    setTimeout(() => {
+    try {
+      const patientAddress = record.owner || patientKeyInput;
+      let encryptedAESKey = '';
+
+      if (isContractsDeployed()) {
+        const { recordRegistry, accessControl } = await getContracts();
+        
+        // 1. Submit on-chain log transaction (requires doctor's signature)
+        console.log('Logging access view on blockchain...');
+        const tx = await recordRegistry.logRecordAccess(record.id);
+        await tx.wait();
+        console.log('Access view logged.');
+
+        // 2. Fetch doctor-specific encrypted AES key from AccessControl
+        encryptedAESKey = await accessControl.getEncryptedKey(patientAddress, record.id);
+      } else {
+        // Mock fallback
+        const consent = consents.find(
+          c => c.recordId === record.id && 
+          c.providerAddress.toLowerCase() === activeProvider.address.toLowerCase()
+        );
+        if (!consent || consent.status !== 'Active') {
+          throw new Error('Error: You do not have an active consent contract for this record!');
+        }
+        encryptedAESKey = record.encryptedOwnerKey; // Use mock owner key for fallback
+      }
+
+      setVisualizerText(`Retrieving ciphertext block from IPFS: ${record.ipfsHash.substring(0, 15)}...`);
+
+      // 3. Fetch from IPFS
+      const encryptedPayloadString = await fetchFromIPFS(record.ipfsHash);
+      const { encryptedContent, iv } = JSON.parse(encryptedPayloadString);
+
       setVisualizerText(`Validating provider signature and decrypting with private key...`);
 
-      setTimeout(() => {
-        // Simulates proxy re-encryption and private key decryption
-        // AES key references in crypto.js shifting characters
-        const keyRef = activeProvider.publicKey;
-        const decrypted = decryptData(record.encryptedContent, keyRef);
-        
-        // Actually grab the mock decrypted text from storage
-        setDecryptedContents(prev => ({
-          ...prev,
-          [record.id]: record.decryptedContent
-        }));
+      // 4. Decrypt AES key with Doctor's RSA private key
+      const doctorKeys = await getOrCreatePatientKeys(activeProvider.address);
+      const aesKeyJwkString = await decryptRSA(doctorKeys.privateKey, encryptedAESKey);
 
-        // Log this access event on the ledger blockchain!
+      // 5. Decrypt payload with AES key
+      const decryptedText = await decryptAES(encryptedContent, iv, aesKeyJwkString);
+
+      setDecryptedContents(prev => ({
+        ...prev,
+        [record.id]: decryptedText
+      }));
+
+      // In mock fallback mode, we append to visual ledger since no smart contract did it
+      if (!isContractsDeployed()) {
         appendLedgerEvent({
           action: 'RECORD_DECRYPTED',
           operator: activeProvider.name,
           recordTitle: record.title,
           recordId: record.id,
-          facility: activeProvider.facility,
-          timestamp: new Date().toISOString()
+          facility: activeProvider.facility
         });
+      }
 
-        setTransferStage('idle');
-        setVisualizerText('');
-      }, 1500);
-    }, 1500);
+      setTransferStage('idle');
+      setVisualizerText('');
+    } catch (err) {
+      console.error(err);
+      alert(err.message || 'Decryption failed. Ensure you have active consent permissions.');
+      setTransferStage('idle');
+      setVisualizerText('');
+    }
   };
+
 
   return (
     <div style={{ maxWidth: 1200, margin: '0 auto', padding: '40px 24px', display: 'flex', flexDirection: 'column', gap: 32 }}>

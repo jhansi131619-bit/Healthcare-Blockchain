@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { Shield, Wallet, Activity, Menu, X } from 'lucide-react';
-import { getWalletInfo, setWalletConnected } from '../services/storage';
+import { getWalletInfo, setWalletConnected, getOrCreatePatientKeys } from '../services/storage';
+import { connectWallet, setupWalletListeners } from '../services/blockchain';
 
 export default function Navbar() {
   const location = useLocation();
@@ -12,31 +13,54 @@ export default function Navbar() {
     // Initial fetch
     setWallet(getWalletInfo());
 
-    // Listen for custom events or updates (optional storage listener)
-    const handleStorageChange = () => {
-      setWallet(getWalletInfo());
-    };
-    window.addEventListener('storage', handleStorageChange);
-    
-    // Check state periodically since we are in a single page app
-    const interval = setInterval(() => {
-      setWallet(getWalletInfo());
-    }, 1000);
+    // Connect to window.ethereum if already authorized
+    if (typeof window.ethereum !== 'undefined') {
+      window.ethereum.request({ method: 'eth_accounts' })
+        .then(async (accounts) => {
+          if (accounts.length > 0) {
+            const address = accounts[0];
+            setWalletConnected(true, address);
+            setWallet({ connected: true, address });
+            await getOrCreatePatientKeys(address);
+          } else {
+            // Keep status from getWalletInfo
+            const info = getWalletInfo();
+            if (info.connected && info.address) {
+              setWallet(info);
+            }
+          }
+        })
+        .catch(console.error);
 
-    return () => {
-      window.removeEventListener('storage', handleStorageChange);
-      clearInterval(interval);
-    };
+      setupWalletListeners(async (newAddress) => {
+        if (newAddress) {
+          setWalletConnected(true, newAddress);
+          setWallet({ connected: true, address: newAddress });
+          await getOrCreatePatientKeys(newAddress);
+        } else {
+          setWalletConnected(false, '');
+          setWallet({ connected: false, address: '' });
+        }
+      });
+    }
   }, []);
 
-  const handleWalletToggle = () => {
+  const handleWalletToggle = async () => {
     if (wallet.connected) {
       setWalletConnected(false, '');
+      setWallet({ connected: false, address: '' });
     } else {
-      setWalletConnected(true, '0x71C824...49b2');
+      try {
+        const address = await connectWallet();
+        setWalletConnected(true, address);
+        setWallet({ connected: true, address });
+        await getOrCreatePatientKeys(address);
+      } catch (err) {
+        alert(err.message || 'MetaMask connection failed');
+      }
     }
-    setWallet(getWalletInfo());
   };
+
 
   const navItems = [
     { name: 'Gateway', path: '/' },
@@ -122,7 +146,7 @@ export default function Navbar() {
           }}
         >
           <Wallet size={16} />
-          {wallet.connected ? wallet.address : 'Connect Wallet'}
+          {wallet.connected ? `${wallet.address.substring(0, 6)}...${wallet.address.substring(wallet.address.length - 4)}` : 'Connect Wallet'}
         </button>
 
         {/* Mobile menu button */}

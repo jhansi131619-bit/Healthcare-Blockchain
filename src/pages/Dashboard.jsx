@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { Key, Shield, User, FileText, CheckCircle2, ChevronRight, Activity, Globe } from 'lucide-react';
-import { getPatientKeys, getRecords, getConsents, getWalletInfo, setWalletConnected } from '../services/storage';
+import { getOrCreatePatientKeys, getRecords, getConsents, getWalletInfo, setWalletConnected, registerPublicKeyOnChain } from '../services/storage';
+import { connectWallet } from '../services/blockchain';
 
 export default function Dashboard() {
   const [keys, setKeys] = useState({});
@@ -11,25 +12,46 @@ export default function Dashboard() {
   const [recentRecords, setRecentRecords] = useState([]);
 
   useEffect(() => {
-    setKeys(getPatientKeys());
-    const recs = getRecords();
-    setRecordsCount(recs.length);
-    setRecentRecords(recs.slice(0, 3));
-    
-    const consents = getConsents().filter(c => c.status === 'Active');
-    setActiveConsentsCount(consents.length);
-    
-    setWallet(getWalletInfo());
-  }, []);
+    const loadData = async () => {
+      const walletInfo = getWalletInfo();
+      setWallet(walletInfo);
 
-  const handleConnectWallet = () => {
+      const address = walletInfo.connected ? walletInfo.address : '';
+      const pKeys = await getOrCreatePatientKeys(address);
+      setKeys(pKeys);
+
+      if (address) {
+        await registerPublicKeyOnChain(address, pKeys.publicKey);
+      }
+
+      const recs = await getRecords(address);
+      setRecordsCount(recs.length);
+      setRecentRecords(recs.slice(0, 3));
+
+      const consents = await getConsents(address);
+      const activeConsents = consents.filter(c => c.status === 'Active');
+      setActiveConsentsCount(activeConsents.length);
+    };
+
+    loadData();
+  }, [wallet.connected]);
+
+  const handleConnectWallet = async () => {
     if (wallet.connected) {
       setWalletConnected(false, '');
+      setWallet({ connected: false, address: '' });
+      setKeys({});
     } else {
-      setWalletConnected(true, '0x71C824...49b2');
+      try {
+        const address = await connectWallet();
+        setWalletConnected(true, address);
+        setWallet({ connected: true, address });
+      } catch (err) {
+        alert(err.message || 'MetaMask connection failed');
+      }
     }
-    setWallet(getWalletInfo());
   };
+
 
   return (
     <div style={{ maxWidth: 1200, margin: '0 auto', padding: '40px 24px', display: 'flex', flexDirection: 'column', gap: 32 }}>

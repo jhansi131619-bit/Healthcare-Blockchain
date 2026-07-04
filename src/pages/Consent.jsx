@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Shield, Plus, Trash2, Heart, FileText, Check, AlertCircle } from 'lucide-react';
-import { getRecords, getConsents, saveConsent, revokeConsent, MOCK_PROVIDERS } from '../services/storage';
+import { getRecords, getConsents, saveConsent, revokeConsent, getWalletInfo, MOCK_PROVIDERS } from '../services/storage';
 
 export default function Consent() {
   const [records, setRecords] = useState([]);
@@ -8,42 +8,70 @@ export default function Consent() {
   const [selectedRecordId, setSelectedRecordId] = useState('');
   const [selectedProviderId, setSelectedProviderId] = useState('');
   const [toastMessage, setToastMessage] = useState('');
+  const [wallet, setWallet] = useState({ connected: false, address: '' });
 
   useEffect(() => {
-    setRecords(getRecords());
-    setConsents(getConsents());
-    
-    // Set initial form values if records/providers are loaded
-    const recs = getRecords();
-    if (recs.length > 0) setSelectedRecordId(recs[0].id);
-    if (MOCK_PROVIDERS.length > 0) setSelectedProviderId(MOCK_PROVIDERS[0].id);
+    const loadData = async () => {
+      const walletInfo = getWalletInfo();
+      setWallet(walletInfo);
+
+      const address = walletInfo.connected ? walletInfo.address : '';
+      const recs = await getRecords(address);
+      setRecords(recs);
+
+      const cons = await getConsents(address);
+      setConsents(cons);
+
+      if (recs.length > 0) setSelectedRecordId(recs[0].id);
+      if (MOCK_PROVIDERS.length > 0) setSelectedProviderId(MOCK_PROVIDERS[0].id);
+    };
+    loadData();
   }, []);
 
-  const handleGrant = (e) => {
+  const handleGrant = async (e) => {
     e.preventDefault();
     if (!selectedRecordId || !selectedProviderId) return;
 
-    saveConsent(selectedRecordId, selectedProviderId);
-    setConsents(getConsents());
+    const provider = MOCK_PROVIDERS.find(p => p.id === selectedProviderId);
+    if (!provider) return;
 
-    // Show temporary confirmation
-    const providerName = MOCK_PROVIDERS.find(p => p.id === selectedProviderId)?.name;
-    setToastMessage(`Consent successfully granted to ${providerName}`);
-    setTimeout(() => setToastMessage(''), 3000);
+    try {
+      const address = wallet.connected ? wallet.address : '';
+      setToastMessage('Authorizing clinic on blockchain...');
+      await saveConsent(selectedRecordId, provider.address, address);
+      
+      const cons = await getConsents(address);
+      setConsents(cons);
+      setToastMessage(`Consent successfully granted to ${provider.name}`);
+      setTimeout(() => setToastMessage(''), 3000);
+    } catch (err) {
+      alert(err.message || 'Failed to grant consent');
+      setToastMessage('');
+    }
   };
 
-  const handleRevoke = (recordId, providerId) => {
-    revokeConsent(recordId, providerId);
-    setConsents(getConsents());
-    
-    const providerName = MOCK_PROVIDERS.find(p => p.id === providerId)?.name;
-    setToastMessage(`Access revoked for ${providerName}`);
-    setTimeout(() => setToastMessage(''), 3000);
+  const handleRevoke = async (recordId, providerAddress) => {
+    try {
+      const address = wallet.connected ? wallet.address : '';
+      setToastMessage('Revoking clinic access on blockchain...');
+      await revokeConsent(recordId, providerAddress, address);
+
+      const cons = await getConsents(address);
+      setConsents(cons);
+      
+      const provider = MOCK_PROVIDERS.find(p => p.address.toLowerCase() === providerAddress.toLowerCase());
+      setToastMessage(`Access revoked for ${provider ? provider.name : providerAddress}`);
+      setTimeout(() => setToastMessage(''), 3000);
+    } catch (err) {
+      alert(err.message || 'Failed to revoke consent');
+      setToastMessage('');
+    }
   };
 
   // Group active consents
   const activeConsents = consents.filter(c => c.status === 'Active');
   const revokedConsents = consents.filter(c => c.status === 'Revoked');
+
 
   return (
     <div style={{ maxWidth: 1200, margin: '0 auto', padding: '40px 24px', display: 'flex', flexDirection: 'column', gap: 32 }}>
@@ -171,7 +199,8 @@ export default function Consent() {
               <tbody>
                 {activeConsents.map((con) => {
                   const record = records.find(r => r.id === con.recordId);
-                  const provider = MOCK_PROVIDERS.find(p => p.id === con.providerId);
+                  const provider = MOCK_PROVIDERS.find(p => p.address.toLowerCase() === con.providerAddress.toLowerCase());
+                  const addressDisplay = provider ? provider.address : con.providerAddress;
                   return (
                     <tr key={con.id} style={{ borderBottom: '1px solid rgba(255,255,255,0.04)', fontSize: 14 }}>
                       <td style={{ padding: '16px 8px', fontWeight: 500 }}>
@@ -182,11 +211,11 @@ export default function Consent() {
                       </td>
                       <td style={{ padding: '16px 8px' }}>
                         <div>{provider ? provider.name : 'Unknown Clinician'}</div>
-                        <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>{provider?.facility}</div>
+                        <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>{provider?.facility || 'Independent Clinic'}</div>
                       </td>
                       <td style={{ padding: '16px 8px' }}>
                         <span className="ledger-hash" style={{ fontSize: 11 }}>
-                          {con.providerKey.substring(0, 10)}...{con.providerKey.substring(con.providerKey.length - 6)}
+                          {addressDisplay.substring(0, 10)}...{addressDisplay.substring(addressDisplay.length - 6)}
                         </span>
                       </td>
                       <td style={{ padding: '16px 8px', fontSize: 12, color: 'var(--text-secondary)' }}>
@@ -197,7 +226,7 @@ export default function Consent() {
                       </td>
                       <td style={{ padding: '16px 8px', textAlign: 'right' }}>
                         <button
-                          onClick={() => handleRevoke(con.recordId, con.providerId)}
+                          onClick={() => handleRevoke(con.recordId, con.providerAddress)}
                           className="btn-danger"
                           style={{
                             padding: '6px 12px',
@@ -226,7 +255,7 @@ export default function Consent() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             {revokedConsents.map((con) => {
               const record = records.find(r => r.id === con.recordId);
-              const provider = MOCK_PROVIDERS.find(p => p.id === con.providerId);
+              const provider = MOCK_PROVIDERS.find(p => p.address.toLowerCase() === con.providerAddress.toLowerCase());
               return (
                 <div key={con.id} style={{
                   padding: '10px 16px',

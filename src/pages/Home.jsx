@@ -7,14 +7,17 @@ export default function Home() {
   const [stats, setStats] = useState({ recordsCount: 0, activeConsents: 0, blocksCount: 0 });
 
   useEffect(() => {
-    const records = getRecords();
-    const consents = getConsents().filter(c => c.status === 'Active');
-    const ledger = getLedger();
-    setStats({
-      recordsCount: records.length,
-      activeConsents: consents.length,
-      blocksCount: ledger.length
-    });
+    const loadStats = async () => {
+      const records = await getRecords();
+      const consents = await getConsents();
+      const ledger = getLedger();
+      setStats({
+        recordsCount: Array.isArray(records) ? records.length : 0,
+        activeConsents: Array.isArray(consents) ? consents.filter(c => c.status === 'Active').length : 0,
+        blocksCount: Array.isArray(ledger) ? ledger.length : 0
+      });
+    };
+    loadStats().catch(console.error);
   }, []);
 
   return (

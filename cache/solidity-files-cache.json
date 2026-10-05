@@ -1,9 +1,9 @@
 {
   "_format": "hh-sol-cache-2",
   "files": {
-    "C:\\Users\\LENOVO\\OneDrive\\Desktop\\new project\\contracts\\AccessControl.sol": {
-      "lastModificationDate": 1783058802727,
-      "contentHash": "ba636c545fab6ce2e217b09438d3e48e",
+    "C:\\Users\\LENOVO\\OneDrive\\Desktop\\Healthcare-Blockchain\\Healthcare-Blockchain\\contracts\\AccessControl.sol": {
+      "lastModificationDate": 1791233764024,
+      "contentHash": "0d2532812c43fa65e867a40cd122d08a",
       "sourceName": "contracts/AccessControl.sol",
       "solcConfig": {
         "version": "0.8.20",
@@ -37,9 +37,9 @@
         "AccessControl"
       ]
     },
-    "C:\\Users\\LENOVO\\OneDrive\\Desktop\\new project\\contracts\\RecordRegistry.sol": {
-      "lastModificationDate": 1783058850411,
-      "contentHash": "436c1b89e25287b22c237d7ed4ec17ee",
+    "C:\\Users\\LENOVO\\OneDrive\\Desktop\\Healthcare-Blockchain\\Healthcare-Blockchain\\contracts\\RecordRegistry.sol": {
+      "lastModificationDate": 1791233764024,
+      "contentHash": "61303664f4c302e4214c4866a349a42a",
       "sourceName": "contracts/RecordRegistry.sol",
       "solcConfig": {
         "version": "0.8.20",

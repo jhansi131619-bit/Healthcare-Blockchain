@@ -199,8 +199,10 @@ export default function Consent() {
               <tbody>
                 {activeConsents.map((con) => {
                   const record = records.find(r => r.id === con.recordId);
-                  const provider = MOCK_PROVIDERS.find(p => p.address.toLowerCase() === con.providerAddress.toLowerCase());
-                  const addressDisplay = provider ? provider.address : con.providerAddress;
+                  const provider = MOCK_PROVIDERS.find(p =>
+                    con.providerAddress && p.address.toLowerCase() === con.providerAddress.toLowerCase()
+                  ) || MOCK_PROVIDERS.find(p => p.id === con.providerId);
+                  const addressDisplay = provider ? provider.address : (con.providerAddress || 'Unknown');
                   return (
                     <tr key={con.id} style={{ borderBottom: '1px solid rgba(255,255,255,0.04)', fontSize: 14 }}>
                       <td style={{ padding: '16px 8px', fontWeight: 500 }}>
@@ -255,7 +257,9 @@ export default function Consent() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             {revokedConsents.map((con) => {
               const record = records.find(r => r.id === con.recordId);
-              const provider = MOCK_PROVIDERS.find(p => p.address.toLowerCase() === con.providerAddress.toLowerCase());
+              const provider = MOCK_PROVIDERS.find(p =>
+                con.providerAddress && p.address.toLowerCase() === con.providerAddress.toLowerCase()
+              ) || MOCK_PROVIDERS.find(p => p.id === con.providerId);
               return (
                 <div key={con.id} style={{
                   padding: '10px 16px',
